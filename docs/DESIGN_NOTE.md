@@ -2,164 +2,159 @@
 
 ## The constraint that shaped everything
 
-I started by fetching the store's HTML directly. It comes back with a `<title>`
-and essentially nothing else — the entire catalogue is rendered client-side.
+The first thing I did was fetch the store's HTML directly, without a
+browser. It came back with basically nothing in it — a page title and not
+much else. The whole catalogue is rendered client-side. That one fact
+decided the shape of the rest of the project.
 
-That put me in front of an apparent contradiction in the brief. It asks me to
-*prefer lightweight HTTP fetching* and *reach for a headless browser only where
-the page genuinely requires it*. Taken at face value, this page genuinely
-requires a browser. But running Chromium every two hours for every tracked
-product on a 512 MB free-tier instance is slow, memory-hungry, and the most
-fragile option available.
-
-The way out: a JavaScript store still has to get its data from somewhere. Its
-own frontend makes network calls. So the browser is used **once, as a teacher**.
+On top of that, once I actually got a browser rendering the page, individual
+product pages still didn't show a price right away. They sit behind a
+"reveal" interaction, and even after that the price doesn't always show up
+immediately — sometimes it needs a real mouse hover before it does anything,
+sometimes it just takes a few seconds regardless. I only found this out by
+running the scraper in headed mode and watching it happen live, which is
+part of why the headed-mode command exists as more than just a nice-to-have
+for the recording — it's genuinely how I debugged the hardest part of this.
 
 ## Architecture: a ladder that learns
 
-Three strategies, tried in order, with the one that worked last time promoted to
-first place for the next run:
+Three strategies are tried in order for each product, and whichever one
+worked last time gets promoted to first place on the next run:
 
-1. `json_api` — call the JSON endpoint, one plain HTTP request
-2. `http_html` — fetch and parse the HTML, including state embedded in `<script>` tags
-3. `browser` — render in headless Chromium
+1. `json_api` — call the JSON endpoint the store's own frontend uses, one
+   plain HTTP request.
+2. `http_html` — fetch and parse the HTML, including any state sitting
+   directly in `<script>` tags.
+3. `browser` — render the page in headless Chromium.
 
-The browser strategy attaches a listener to every response the page receives. Any
-JSON response whose URL looks like product data and whose body contains a list of
-records is saved to a `SiteProfile` row. The next scheduled run finds that
-endpoint waiting for it and never starts a browser.
-
-So the steady state is a single HTTP request per product. The browser is the
-fallback, and also the recovery path: if the learned endpoint starts returning
-404 because the store changed, the ladder falls through to the browser, which
-re-learns the new endpoint and saves it. The system repairs itself without a
-deploy.
-
-This is the part of the design I would defend hardest. It is not a clever trick
-— it is the only way I found to honour both halves of the brief at once.
+While the browser strategy runs, it listens to every response the page
+receives. Any JSON response that looks like a list of product records gets
+cached. From then on, the lightweight `json_api` strategy tries that
+endpoint first and the browser doesn't have to start at all. In practice the
+catalogue-level data was available this way, but the actual price per
+product turned out to be deliberately withheld from any JSON response until
+the reveal interaction happens — so for price specifically, the browser
+strategy ends up doing the real work most of the time, and the ladder exists
+mainly so a cheaper path is tried first when it can succeed.
 
 ## Reliability decisions
 
-**Retries are classified, not blanket.** Timeouts, connection errors and 5xx
-responses are retried with backoff at 2s, 5s and 11s, each with ±40% jitter. A
-404, or a page that renders fine but contains no price, is permanent — retrying
-it four times wastes 18 seconds to arrive at the same answer. Permanent errors
-fall through to the next strategy immediately.
+**Detecting the price by what changed, not by where it lives.** My first
+version of the browser strategy looked for the price inside a fixed list of
+CSS selectors. It worked inconsistently — sometimes the click on "reveal
+price" would time out entirely and the price would still show up a few
+seconds later somewhere else on the page; sometimes the selectors just
+didn't match whatever element the store actually used. I replaced that
+approach with something selector-independent: snapshot every currency-shaped
+bit of text visible before doing anything, then watch for *new*
+currency-shaped text to appear afterward, and only trust it once it's held
+steady for half a second. This turned out to be more robust than trying to
+predict the exact DOM shape, because it doesn't actually matter whether the
+price arrives via a click, a delay, or something else — the detection
+doesn't care how it got there.
 
-The jitter matters more than it looks. Without it, every product that fails at
-the same moment retries at the same moment, which turns a brief wobble in the
-store into a synchronised hammer.
+**Retries that know the difference between "try again" and "this won't
+change."** Timeouts, connection errors, and 5xx responses are retried with
+backoff at 2s, 5s, and 11s, with jitter added so that several products
+failing at the same moment don't all retry in lockstep. A 404, or a page
+that renders fine but genuinely has no price on it, is treated as permanent
+and the scraper moves on to the next strategy immediately rather than
+spending four attempts to arrive at the same answer.
 
-**Waiting for the right thing.** The obvious way to handle late-loading content
-is `wait_for_load_state("networkidle")`. That is a proxy for what I actually
-care about, and a bad one — the network can go quiet before the price element is
-populated, and on a slow response it never goes quiet at all. So the browser
-strategy polls for a *parseable price*, and requires it to be stable across two
-reads about 600 ms apart before accepting it. `networkidle` is still used, but
-with a short timeout and a shrug if it expires.
+**Waiting for the right thing, not a proxy for it.** The easy way to handle
+late-loading content is to wait for the network to go idle and then read
+whatever's on the page. That's a weak signal here — the network can go quiet
+before the price is actually populated, and on a slow response it might
+never go quiet within a reasonable window at all. So the scraper polls for
+an actual parseable price instead, and gives that up to 25 seconds, since
+the assignment description explicitly says responses can be slow.
 
-**The validator is the whole point.** The brief says the scraper must never
-store wrong or empty data. I put a single gate in front of the database rather
-than trusting each strategy:
+**A single gate in front of the database.** Every reading has to pass
+through validation before it's written anywhere:
 
-- The price must parse to a positive number in a plausible range.
-- Ambiguous text returns `None` instead of a guess. If an element contains both
-  an MRP and a live price, the parser refuses it rather than picking one. An
-  honest failure row is better than a plausible wrong number, because a wrong
-  number is invisible forever afterwards.
-- If a new reading is more than 40% from the rolling median of the last nine, it
-  is not trusted on its own. The scraper re-fetches using a *different*
-  strategy. Agreement means the outlier is a real price change and it is stored.
-  Disagreement means something is broken, and the attempt is logged as
-  `rejected` with nothing written to history.
+- The price has to parse to a positive number in a sane range. Ambiguous
+  text — a listing that mixes a struck-through original price with the
+  current one, say — comes back as "couldn't read this" rather than a guess,
+  because a wrong number stored silently is worse than an honest gap.
+- If a new price is far off the recent rolling median, one reading isn't
+  trusted by itself. The scraper re-fetches using a different strategy;
+  agreement means the price genuinely changed and it gets stored, and
+  disagreement means the attempt is logged as rejected with nothing written.
 
-That last rule is the one I am least sure about, and it is a genuine trade-off —
-see below.
+**Failures are rows, not silence.** Every attempt — successful or not — gets
+logged with a timestamp, an outcome, how many tries it took, and a
+step-by-step trace. The scrape log is meant to be read honestly: a run that
+failed shows up as failed, not as a stale price sitting there looking fine.
 
-**Failures are first-class rows.** `ScrapeAttempt` records the outcome, the
-number of tries, the duration, the error, and a `trace` array with a line per
-retry and per backoff. The UI shows the trace expanded on demand. Failures are
-not hidden, not silently skipped, and not padded with the previous price.
-
-**Structure drift.** After each success, a hash of the page's shape — which
-selectors matched and their ancestor tag/class path — is compared to the last
-one. A price change does not move it; a redesign does. When it moves, an alert
-is raised. The scraper does not stop; it flags.
+**Catching a redesign.** After a successful scrape, the scraper hashes a
+coarse description of the page's shape — which selectors matched and the
+tag/class path down to them. A price changing doesn't move this hash; the
+page being restructured does. When it moves, an alert gets raised instead of
+the scraper quietly reading whatever happens to be in that spot from then on.
 
 ## Trade-offs I made
 
-**Anomaly confirmation can suppress a real crash in price.** If the store
-genuinely halves a price, the first reading is rejected, and the confirmation
-fetch has to agree before it is stored. If both reads succeed this costs one
-extra request and nothing else. But if the confirming strategy happens to fail,
-a real price change is recorded as `rejected` and lost until the next run two
-hours later. I decided a two-hour delay on a real change is cheaper than a
-permanent wrong number in the history, given the brief weights correctness over
-completeness. A production system would store it as `unconfirmed` rather than
-discarding it.
+**Confirming an outlier can delay a real price crash.** If the store
+genuinely drops a price sharply, the first reading gets rejected pending
+confirmation, and if the confirming fetch happens to fail for an unrelated
+reason, a real change ends up logged as rejected and isn't picked up again
+until the next scheduled run. I decided that was an acceptable trade against
+the alternative of a single bad reading permanently poisoning the history,
+given how much the brief weights correctness over completeness.
 
-**Chromium on a 512 MB instance.** If the learned endpoint holds, the browser
-never runs in production and this is free. If it does not, a browser launch on
-Render's free tier can be killed by the OOM reaper. The ladder degrades to
-"failed, logged honestly" rather than crashing the run, and `PLAYWRIGHT_ENABLED`
-can turn the fallback off entirely. Accepted rather than solved.
+**The browser is the expensive path, and it's the one that matters most
+here.** Because the price genuinely isn't obtainable any other way on this
+particular store, the browser strategy isn't really an occasional fallback
+in practice — it's doing most of the real work. That's more resource-heavy
+than I'd have liked, but it was a decision forced by how the store is built,
+not a choice I'd have made if the price had been reachable more cheaply.
 
-**Selector lists instead of one selector.** Every element is looked up through a
-candidate list plus a regex text-scan as a last resort. This is more robust and
-less precise — a wide net can catch the wrong fish. The validator is what makes
-this safe: a wrong catch usually produces an implausible number, and implausible
-numbers do not get stored.
+**Wide selector lists instead of one precise selector.** Every DOM lookup
+that isn't the price itself (name, stock, catalogue cards) goes through a
+list of plausible candidates plus a text-pattern fallback, rather than one
+hard-coded selector. That's less precise on its own, which is exactly why
+the validation layer exists — an implausible catch is far more likely to get
+rejected before it ever reaches the price history.
 
-**No email alerts.** Alerts are in-app. SendGrid was a bonus item and I would
-rather submit a scraper I trust than a notification feature I rushed.
+## What went wrong on the first attempt, and how I fixed it
 
-**A synchronous cron endpoint.** `/api/cron/scrape/` does the work in the
-request rather than queueing it. With a handful of products and ~1s per
-lightweight scrape this is fine, and it means one moving part instead of three.
-It would not survive fifty products, at which point the right answer is a task
-queue, not a longer timeout.
+**The first version launched a browser for every scrape, every time.**
+Given that the raw HTML is empty, that was the obvious starting point, and
+it worked — but it would have meant spinning up Chromium for every tracked
+product on every scheduled run, which is slow and heavy for what's supposed
+to be a small, unattended job. The fix was to have the browser teach the
+lightweight path instead of being the path itself: watch what JSON the page
+fetches for itself, cache the useful endpoint, and only fall back to the
+browser when the cheap path doesn't have what it needs.
 
-## What the AI tools got wrong first time, and how I corrected it
+**The waiting logic trusted "network idle" as a stand-in for "the price is
+there."** Against a store that deliberately reveals content late, that
+assumption reads whatever happens to be on the page at the moment the
+network quiets down — which can easily be nothing. I rewrote it to poll for
+an actual parseable price and wait it out properly rather than trusting a
+timing heuristic.
 
-I used Claude heavily while building this. The useful failures:
+**The price parser used to guess when it wasn't sure.** An early version
+returned 0 when it couldn't find a number, and grabbed the first number it
+saw when a listing showed more than one price on the page (an original price
+next to a discounted one, for example). Both are exactly the failure mode
+the brief warns about — a `0` would have gone straight into the price
+history looking like real data, and grabbing the first number isn't always
+grabbing the right one. I rewrote it to return nothing rather than a guess
+when the text is ambiguous, and to prefer the lowest plausible number when
+several appear together, since that's the one actually being charged.
 
-**It reached straight for Playwright on everything.** The first design it
-produced launched a browser for every product on every run, because the served
-HTML is empty and that is the obvious conclusion. It was a working scraper and a
-bad one — slow, memory-hungry, and guaranteed to die on a free tier. The fix was
-mine: use the browser once to discover the store's own JSON endpoint, cache it,
-and serve every subsequent run over plain HTTP. That reframing is what turned a
-naive scraper into one that fits the brief's constraints.
+**The reveal-price detection was hard-coded to a specific click flow, and it
+broke as soon as the store didn't need a click.** This was the trickiest bug
+to catch, because it only showed up as every single scrape failing with "no
+price found," with no obvious cause from the logs alone. Watching it run in
+headed mode made it clear: sometimes the click itself timed out, and the
+price still appeared a few seconds later regardless. The fix was to stop
+assuming *how* the price would appear and just watch *whether* it did —
+comparing the page's text before and after, rather than depending on a
+specific interaction succeeding.
 
-**It treated `networkidle` as "the content has loaded".** The generated waiting
-logic was `page.goto(...); page.wait_for_load_state("networkidle"); read price`.
-Against a store that loads content asynchronously after a delay, this reads
-whatever is in the DOM at the moment the network happens to go quiet — which on
-a slow response is an empty element or a placeholder. I replaced it with polling
-for a parseable price and requiring it to be stable across two reads.
-
-**Its parser guessed.** The first `parse_price` returned `0` when it could not
-find a number, and grabbed the first number it saw when there were several.
-Both are exactly the bug the brief warns about: `0` would have gone into the
-history as a real price, and the first number in `₹2,499 ₹3,999` is not always
-the one being charged. I rewrote it to return `None` on ambiguity, take the
-lowest plausible candidate when several are present, and refuse text blobs that
-mix "MRP" with a live price. This is now the most heavily tested file in the
-project.
-
-**It wrote `except Exception: pass` around the scrape loop.** The stated intent
-was "so one product doesn't break the run", which is correct — but swallowing
-the exception silently is precisely the "never silently stop" failure mode. I
-kept the catch and made every branch write a trace row, so the run continues
-*and* the log says why.
-
-**It offered to hard-code selectors I had not verified.** Since I could not see
-the rendered DOM from outside a browser, it happily proposed `.product-price`
-and friends as though they were known. I turned those into candidate lists and
-wrote `manage.py probe_store` to check them against the real rendered page and
-report which ones actually match, so the guesses are verified rather than
-assumed.
-
-The pattern across all five: the model produces code that runs, and is
-optimistic about the world. Every correction I made was in the same direction —
-making the scraper assume less and admit more.
+The pattern across all of these is the same: the early versions were
+optimistic about what the page would do, and every fix in the same
+direction — making the scraper assume less about the page's behavior and
+verify more of what actually happened before trusting it.
