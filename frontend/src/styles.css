@@ -1,0 +1,566 @@
+/*
+   Design notes
+   ------------
+   This is an instrument panel, not a storefront. The only saturated colour in
+   the interface is the outcome vocabulary — success, retried, failed,
+   rejected — because the whole point of the app is whether the scraper can be
+   trusted. Everything else is ink on paper.
+
+   Inter carries the interface; IBM Plex Mono carries every number, timestamp
+   and log line, so columns of figures line up and a price is visually a
+   reading rather than a label.
+*/
+
+:root {
+  --paper: #eef1f4;
+  --panel: #ffffff;
+  --ink: #101720;
+  --ink-soft: #5b6b7b;
+  --hairline: #d6dde4;
+  --hairline-strong: #b9c4ce;
+
+  --ok: #0c7053;
+  --ok-wash: #daefe6;
+  --warn: #9a5b00;
+  --warn-wash: #f8e8cd;
+  --bad: #ab2318;
+  --bad-wash: #f7dedb;
+  --odd: #5e3f97;
+  --odd-wash: #e7e0f4;
+
+  --focus: #1f5fbf;
+
+  --mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  --sans: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
+
+  box-sizing: border-box;
+  padding-top: env(safe-area-inset-top, 0px);
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --paper: #0e1319;
+    --panel: #151c25;
+    --ink: #e6ecf3;
+    --ink-soft: #92a3b4;
+    --hairline: #27313c;
+    --hairline-strong: #3a4653;
+    --ok: #4fc79d;
+    --ok-wash: #11332a;
+    --warn: #e2a951;
+    --warn-wash: #3a2d12;
+    --bad: #f08a7e;
+    --bad-wash: #3c1c19;
+    --odd: #b39bea;
+    --odd-wash: #2a2240;
+    --focus: #7fb0ff;
+  }
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: inherit;
+}
+
+html {
+  scroll-padding-top: env(safe-area-inset-top, 0px);
+}
+
+body {
+  margin: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--sans);
+  font-size: 15px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+button {
+  font: inherit;
+  cursor: pointer;
+}
+
+:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+  border-radius: 3px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation: none !important;
+    transition: none !important;
+  }
+}
+
+/* ------------------------------------------------------------------ shell */
+.shell {
+  max-width: 1240px;
+  margin: 0 auto;
+  padding: 28px 22px 80px;
+}
+
+.masthead {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 14px;
+  padding-bottom: 18px;
+  border-bottom: 1px solid var(--hairline-strong);
+}
+
+.masthead h1 {
+  margin: 0;
+  font-size: 22px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.masthead p {
+  margin: 4px 0 0;
+  color: var(--ink-soft);
+  font-size: 13.5px;
+  max-width: 62ch;
+}
+
+.pulse {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--ink-soft);
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.pulse .dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--ok);
+}
+
+.pulse .dot.down {
+  background: var(--bad);
+}
+
+/* ------------------------------------------------------------------ layout */
+.columns {
+  display: grid;
+  grid-template-columns: 340px minmax(0, 1fr);
+  gap: 22px;
+  margin-top: 22px;
+  align-items: start;
+}
+
+@media (max-width: 900px) {
+  .columns {
+    grid-template-columns: 1fr;
+  }
+}
+
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--hairline);
+  border-radius: 6px;
+}
+
+.panel + .panel {
+  margin-top: 18px;
+}
+
+.panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 13px 16px;
+  border-bottom: 1px solid var(--hairline);
+}
+
+.panel-head h2 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.panel-body {
+  padding: 16px;
+}
+
+/* ------------------------------------------------------------------ search */
+.search-row {
+  display: flex;
+  gap: 8px;
+}
+
+input[type="text"],
+input[type="number"],
+select {
+  width: 100%;
+  padding: 9px 11px;
+  border: 1px solid var(--hairline-strong);
+  border-radius: 4px;
+  background: var(--panel);
+  color: var(--ink);
+  font: inherit;
+}
+
+.btn {
+  padding: 9px 14px;
+  border: 1px solid var(--ink);
+  border-radius: 4px;
+  background: var(--ink);
+  color: var(--panel);
+  font-size: 14px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.btn[disabled] {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.btn.quiet {
+  background: transparent;
+  color: var(--ink);
+  border-color: var(--hairline-strong);
+}
+
+.btn.small {
+  padding: 5px 10px;
+  font-size: 12.5px;
+}
+
+.result {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 0;
+  border-top: 1px solid var(--hairline);
+}
+
+.result:first-child {
+  border-top: none;
+}
+
+.result .who {
+  min-width: 0;
+}
+
+.result .who strong {
+  display: block;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.result .who span {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--ink-soft);
+}
+
+/* -------------------------------------------------------------- watchlist */
+.watch {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.watch li {
+  border-top: 1px solid var(--hairline);
+}
+
+.watch li:first-child {
+  border-top: none;
+}
+
+.watch button {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 12px 16px;
+  background: none;
+  border: none;
+  border-left: 3px solid transparent;
+  color: inherit;
+}
+
+.watch button:hover {
+  background: var(--paper);
+}
+
+.watch button[aria-current="true"] {
+  border-left-color: var(--ink);
+  background: var(--paper);
+}
+
+.watch .line {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.watch .name {
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.watch .price {
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.watch .meta {
+  margin-top: 3px;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  color: var(--ink-soft);
+}
+
+/* --------------------------------------------------------------- ribbon */
+/* The hero. Each tick is one scrape attempt, oldest on the left.          */
+.ribbon {
+  display: flex;
+  gap: 2px;
+  height: 40px;
+  align-items: flex-end;
+}
+
+.ribbon .tick {
+  flex: 1 1 0;
+  min-width: 3px;
+  border-radius: 1px;
+  transform-origin: bottom;
+  animation: rise 420ms cubic-bezier(0.2, 0.8, 0.3, 1) backwards;
+}
+
+@keyframes rise {
+  from {
+    transform: scaleY(0.05);
+  }
+}
+
+.tick.success {
+  background: var(--ok);
+  height: 100%;
+}
+.tick.retried {
+  background: var(--warn);
+  height: 74%;
+}
+.tick.rejected {
+  background: var(--odd);
+  height: 56%;
+}
+.tick.failed {
+  background: var(--bad);
+  height: 38%;
+}
+
+.ribbon-key {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  margin-top: 10px;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  color: var(--ink-soft);
+}
+
+.ribbon-key i {
+  display: inline-block;
+  width: 9px;
+  height: 9px;
+  margin-right: 5px;
+  border-radius: 1px;
+  font-style: normal;
+}
+
+/* ---------------------------------------------------------------- figures */
+.figures {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(128px, 1fr));
+  border-top: 1px solid var(--hairline);
+}
+
+.figures div {
+  padding: 14px 16px;
+  border-right: 1px solid var(--hairline);
+}
+
+.figures div:last-child {
+  border-right: none;
+}
+
+.figures dt {
+  font-size: 12px;
+  color: var(--ink-soft);
+}
+
+.figures dd {
+  margin: 3px 0 0;
+  font-family: var(--mono);
+  font-size: 19px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* -------------------------------------------------------------------- log */
+.tablewrap {
+  overflow-x: auto;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+th {
+  text-align: left;
+  font-weight: 500;
+  color: var(--ink-soft);
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--hairline-strong);
+  white-space: nowrap;
+}
+
+td {
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--hairline);
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+  vertical-align: top;
+}
+
+td.reason {
+  font-family: var(--sans);
+  color: var(--ink-soft);
+  max-width: 44ch;
+  white-space: normal;
+}
+
+.badge {
+  display: inline-block;
+  padding: 1px 7px;
+  border-radius: 3px;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  font-weight: 500;
+}
+
+.badge.success {
+  background: var(--ok-wash);
+  color: var(--ok);
+}
+.badge.retried {
+  background: var(--warn-wash);
+  color: var(--warn);
+}
+.badge.failed {
+  background: var(--bad-wash);
+  color: var(--bad);
+}
+.badge.rejected {
+  background: var(--odd-wash);
+  color: var(--odd);
+}
+
+details.trace summary {
+  cursor: pointer;
+  color: var(--ink-soft);
+  font-size: 12px;
+}
+
+details.trace pre {
+  margin: 8px 0 0;
+  padding: 10px;
+  background: var(--paper);
+  border-radius: 4px;
+  font-size: 11.5px;
+  overflow-x: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* ----------------------------------------------------------------- misc */
+.notice {
+  padding: 14px 16px;
+  border-radius: 5px;
+  border: 1px solid var(--hairline-strong);
+  background: var(--panel);
+  color: var(--ink-soft);
+  font-size: 13.5px;
+}
+
+.notice.bad {
+  border-color: var(--bad);
+  background: var(--bad-wash);
+  color: var(--bad);
+}
+
+.alerts {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.alerts li {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  padding: 10px 0;
+  border-top: 1px solid var(--hairline);
+  font-size: 13.5px;
+}
+
+.alerts li:first-child {
+  border-top: none;
+}
+
+.empty {
+  color: var(--ink-soft);
+  font-size: 13.5px;
+}
+
+.spread {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.chart-holder {
+  width: 100%;
+  height: 260px;
+}
+
+.tabs {
+  display: flex;
+  gap: 4px;
+}
+
+.tabs button {
+  padding: 5px 11px;
+  border: 1px solid var(--hairline-strong);
+  background: transparent;
+  color: var(--ink-soft);
+  border-radius: 4px;
+  font-size: 13px;
+}
+
+.tabs button[aria-pressed="true"] {
+  background: var(--ink);
+  border-color: var(--ink);
+  color: var(--panel);
+}

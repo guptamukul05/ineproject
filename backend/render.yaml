@@ -1,0 +1,28 @@
+services:
+  - type: web
+    name: ine-price-tracker-api
+    runtime: python
+    plan: free
+    region: singapore
+    buildCommand: "./build.sh"
+    startCommand: "gunicorn config.wsgi:application --bind 0.0.0.0:$PORT --workers 1 --threads 4 --timeout 120"
+    healthCheckPath: /api/health/
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.11.9"
+      - key: PLAYWRIGHT_BROWSERS_PATH
+        value: "/opt/render/project/.playwright"
+      - key: DJANGO_DEBUG
+        value: "false"
+      - key: DJANGO_SECRET_KEY
+        generateValue: true
+      - key: DATABASE_URL
+        sync: false
+      - key: CRON_SECRET
+        sync: false
+      - key: STORE_BASE_URL
+        value: "https://demo.inelabteamdev.com"
+      - key: SCRAPE_INTERVAL_MINUTES
+        value: "120"
+      - key: PLAYWRIGHT_ENABLED
+        value: "true"
