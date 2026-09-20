@@ -1,4 +1,4 @@
-# Price watch — INE mock store tracker
+# Price watch — mock store tracker
 
 A small full-stack app that tracks products on
 [demo.inelabteamdev.com](https://demo.inelabteamdev.com), scrapes their price and
